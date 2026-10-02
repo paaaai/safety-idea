@@ -263,6 +263,7 @@
     font-family: inherit; cursor: pointer; margin-top: 10px;
   }
   .login-btn:hover { background: var(--teal-dk); }
+  .login-btn:disabled { opacity: 0.6; cursor: default; }
   .login-err { margin-top: 10px; font-size: 13px; color: var(--error); text-align: center; display: none; }
   .login-err.show { display: block; }
   .back-link {
@@ -336,23 +337,6 @@
   .empty { text-align: center; padding: 50px 20px; background: var(--surface); border-radius: var(--r-md); }
   .empty-tx { font-size: 14px; color: var(--muted); }
 
-  .pw-card { background: var(--surface); border-radius: var(--r-md); padding: 16px; margin-top: 16px; }
-  .pw-t { font-size: 13px; font-weight: 700; color: var(--ink2); margin-bottom: 10px; }
-  .pw-row { display: flex; gap: 6px; flex-wrap: wrap; }
-  .pw-in {
-    flex: 1; min-width: 120px; font-family: inherit; font-size: 14px; color: var(--ink);
-    background: var(--beige); border: 1px solid var(--line); border-radius: var(--r-sm);
-    padding: 9px 12px; outline: none;
-  }
-  .pw-in:focus { border-color: var(--teal); }
-  .pw-btn {
-    padding: 9px 16px; border-radius: var(--r-sm); border: none; background: var(--teal);
-    color: #fff; font-size: 13px; font-weight: 700; font-family: inherit; cursor: pointer;
-  }
-  .pw-msg { margin-top: 8px; font-size: 12.5px; display: none; }
-  .pw-msg.show { display: block; }
-  .pw-msg.ok { color: var(--teal); }
-  .pw-msg.er { color: var(--error); }
 
   @media (max-width: 420px) {
     .hero-title { font-size: 29px; }
@@ -599,15 +583,6 @@
 
       <div id="idea-list"></div>
 
-      <div class="pw-card">
-        <p class="pw-t">관리자 비밀번호 변경 (이 기기에서만 적용)</p>
-        <div class="pw-row">
-          <input class="pw-in" type="password" id="pw-new" placeholder="새 비밀번호" aria-label="새 비밀번호">
-          <input class="pw-in" type="password" id="pw-new2" placeholder="새 비밀번호 확인" aria-label="새 비밀번호 확인">
-          <button class="pw-btn" onclick="changePw()">변경</button>
-        </div>
-        <p class="pw-msg" id="pw-msg"></p>
-      </div>
     </div>
 
     <div class="footer">제안 내용은 구글 시트에 실시간으로 저장됩니다.</div>
@@ -617,14 +592,13 @@
 <script>
 /* ══════════ 설정 ══════════ */
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbyIcY97O0DnebiCdVLPmLlJd5xO9pumD8WPvaWRovEy1XK8yarJOxy5VfaTZJdxewIrYw/exec';
-const DEFAULT_PW = '21493';
-const PW_KEY = 'safety-admin-pw';
 const MAX_PHOTOS = 3;
 const MAX_W = 1600;
 const JPEG_Q = 0.72;
 
 let photos = [];
 let allRecords = [];
+let adminKey = '';      // 로그인한 동안만 메모리에 보관 (저장하지 않음)
 
 /* ══════════ 폼 ══════════ */
 function radioVal(name) {
@@ -803,25 +777,57 @@ function exitAdmin() {
   window.scrollTo({ top: 0 });
 }
 
-function getPw() { try { return localStorage.getItem(PW_KEY) || DEFAULT_PW; } catch (e) { return DEFAULT_PW; } }
-function setPw(v) { try { localStorage.setItem(PW_KEY, v); } catch (e) {} }
-
-function doLogin() {
-  const val = document.getElementById('pw-input').value;
+async function doLogin() {
+  const input = document.getElementById('pw-input');
   const err = document.getElementById('login-err');
-  if (val === getPw()) {
-    err.classList.remove('show');
-    document.getElementById('pw-input').value = '';
+  const btn = document.querySelector('.login-btn');
+  const key = input.value;
+  if (!key) { err.textContent = '비밀번호를 입력해 주세요.'; err.classList.add('show'); return; }
+  btn.disabled = true; btn.textContent = '확인 중...';
+  err.classList.remove('show');
+  const res = await fetchData(key);
+  btn.disabled = false; btn.textContent = '로그인';
+  if (res.ok) {
+    adminKey = key;
+    input.value = '';
     document.getElementById('admin-login').classList.remove('active');
     document.getElementById('admin-dash').classList.add('active');
-    loadData();
+    showRecords(res.records);
     window.scrollTo({ top: 0 });
-  } else err.classList.add('show');
+  } else {
+    err.textContent = res.message;
+    err.classList.add('show');
+  }
 }
+
 function doLogout() {
+  adminKey = '';
+  allRecords = [];
+  document.getElementById('idea-list').innerHTML = '';
   document.getElementById('admin-dash').classList.remove('active');
   document.getElementById('admin-login').classList.add('active');
   window.scrollTo({ top: 0 });
+}
+
+// 서버에 비밀번호를 보내 확인받고 데이터를 받아옴
+async function fetchData(key) {
+  try {
+    const res = await fetch(SCRIPT_URL + '?action=data&key=' + encodeURIComponent(key) + '&t=' + Date.now());
+    const json = await res.json();
+    if (json.result === 'success') return { ok: true, records: json.records || [] };
+    if (json.result === 'denied')  return { ok: false, message: '비밀번호가 맞지 않습니다. 다시 입력해 주세요.' };
+    if (json.result === 'locked')  return { ok: false, message: json.message };
+    return { ok: false, message: '데이터를 불러오지 못했습니다. (' + (json.message || '알 수 없는 오류') + ')' };
+  } catch (e) {
+    return { ok: false, message: '서버에 연결하지 못했습니다. 인터넷 연결과 Apps Script 배포 상태를 확인해 주세요.' };
+  }
+}
+
+function showRecords(recs) {
+  allRecords = recs;
+  buildFilter(); renderStats(); applyFilter();
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('dash-body').style.display = 'block';
 }
 
 async function loadData() {
@@ -831,18 +837,13 @@ async function loadData() {
   ld.innerHTML = '<div class="spinner" style="margin:0 auto 15px"></div><p style="font-size:14px;color:var(--ink2)">구글 시트에서 불러오는 중입니다</p>';
   ld.style.display = 'block'; bd.style.display = 'none';
   ic.classList.add('spinning');
-  try {
-    const res = await fetch(SCRIPT_URL + '?action=data');
-    const json = await res.json();
-    if (json.result !== 'success') throw new Error(json.message);
-    allRecords = json.records || [];
-    buildFilter(); renderStats(); applyFilter();
-    ld.style.display = 'none'; bd.style.display = 'block';
-  } catch (e) {
-    ld.innerHTML = '<p style="font-size:14px;color:var(--error);margin-bottom:6px">데이터를 불러오지 못했습니다.</p>'
-      + '<p style="font-size:12.5px;color:var(--muted)">Apps Script가 &lsquo;모든 사용자&rsquo; 권한으로 배포되었는지 확인해 주세요.</p>'
+  const res = await fetchData(adminKey);
+  ic.classList.remove('spinning');
+  if (res.ok) showRecords(res.records);
+  else {
+    ld.innerHTML = '<p style="font-size:14px;color:var(--error);margin-bottom:6px">' + esc(res.message) + '</p>'
       + '<button class="btn" style="margin-top:14px" onclick="loadData()">다시 불러오기</button>';
-  } finally { ic.classList.remove('spinning'); }
+  }
 }
 
 function renderStats() {
@@ -911,19 +912,6 @@ function renderList(recs) {
     });
     box.appendChild(card);
   });
-}
-
-function changePw() {
-  const a = document.getElementById('pw-new').value;
-  const b = document.getElementById('pw-new2').value;
-  const m = document.getElementById('pw-msg');
-  if (!a) { m.className = 'pw-msg show er'; m.textContent = '새 비밀번호를 입력해 주세요.'; return; }
-  if (a !== b) { m.className = 'pw-msg show er'; m.textContent = '두 비밀번호가 다릅니다.'; return; }
-  setPw(a);
-  document.getElementById('pw-new').value = '';
-  document.getElementById('pw-new2').value = '';
-  m.className = 'pw-msg show ok'; m.textContent = '비밀번호를 변경했습니다.';
-  setTimeout(() => m.classList.remove('show'), 3000);
 }
 
 function esc(s) {
